@@ -1,0 +1,9 @@
+[project]
+name = "cirrus-weather"
+version = "0.1.0"
+description = "A keyless weather site with the map in front: wind, radar, temperature, clouds, pressure."
+requires-python = ">=3.13"
+dependencies = []   # standard library only
+
+[tool.setuptools]
+packages = ["cirrus"]

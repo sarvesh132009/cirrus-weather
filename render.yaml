@@ -1,0 +1,11 @@
+# Render Blueprint: New > Blueprint > pick your GitHub repo. Free plan, no card needed.
+services:
+  - type: web
+    name: cirrus-weather
+    runtime: docker
+    plan: free
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: CIRRUS_DAILY_BUDGET   # Open-Meteo calls per day; the map grid spends one per point
+        value: "6000"
