@@ -196,13 +196,41 @@ class VercelApp(unittest.TestCase):
         self.assertIn("s-maxage=1800", self.call(q)[1]["Cache-Control"])
         self.assertIn("s-maxage=120", self.call("/api/radar")[1]["Cache-Control"])
 
+    def vercel_call(self, route: str, original_query: str = "", **headers):
+        """What the function sees when Vercel rewrites a route: its own internal path, with the route in ?__path=."""
+        query = f"__path={route}" + (f"&{original_query}" if original_query else "")
+        return self.call(f"/api/index?{query}", **headers)
+
+    def test_route_survives_when_vercel_hides_the_original_path(self):
+        self.assertEqual(self.vercel_call("/healthz")[::2], ("200 OK", b"ok"))
+        status, headers, body = self.vercel_call("/forecast/overview", LOC, HTTP_ACCEPT_ENCODING="gzip")
+        self.assertEqual(status, "200 OK")
+        self.assertIn("Bengaluru", gzip.decompress(body).decode())  # the visitor's own query string came through too
+        self.assertEqual(self.vercel_call("/api/radar")[0], "200 OK")
+        self.assertTrue(self.vercel_call("/not-found")[0].startswith("404"))
+        # ?__path= is for the platform, so it must not leak into the page's own parameters
+        status, _, body = self.vercel_call("/forecast/hourly", LOC + "&__debug=0")
+        self.assertEqual(status, "200 OK")
+
+    def test_vercel_rewrites_cover_every_route(self):
+        rewrites = {r["source"]: r["destination"] for r in json.loads((ROOT / "vercel.json").read_text())["rewrites"]}
+        routes = ["/", "/healthz", "/search", "/api/field", "/api/radar"] + [f"/forecast/{p}" for p in server.FORECAST_PAGES]
+        for route in routes:
+            self.assertEqual(rewrites.get(route), f"/api/index?__path={route}", route)
+        self.assertEqual(rewrites["/(.*)"], "/api/index?__path=/not-found")  # anything else gets the app's own 404
+
+    def test_debug_page_shows_what_the_platform_passed(self):
+        status, headers, body = self.call("/api/index?__path=/healthz&__debug=1")
+        info = json.loads(body)
+        self.assertEqual((status, info["PATH_INFO"], info["resolved"]), ("200 OK", "/api/index", "/healthz"))
+        self.assertEqual(headers["Cache-Control"], "no-store")
+
     def test_vercel_files(self):
         spec = importlib.util.spec_from_file_location("vercel_entry", ROOT / "api" / "index.py")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         self.assertIs(module.app, wsgi.app)
         cfg = json.loads((ROOT / "vercel.json").read_text())
-        self.assertEqual(cfg["rewrites"][0]["destination"], "/api/index")
         self.assertIn("api/index.py", cfg["functions"])
         for name in ("map.js", "style.css", "home.js"):
             self.assertTrue((ROOT / "public" / "static" / name).is_file(), name)

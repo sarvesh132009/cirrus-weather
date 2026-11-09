@@ -1,6 +1,19 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "rewrites": [{ "source": "/(.*)", "destination": "/api/index" }],
+  "rewrites": [
+    { "source": "/", "destination": "/api/index?__path=/" },
+    { "source": "/healthz", "destination": "/api/index?__path=/healthz" },
+    { "source": "/search", "destination": "/api/index?__path=/search" },
+    { "source": "/forecast/overview", "destination": "/api/index?__path=/forecast/overview" },
+    { "source": "/forecast/hourly", "destination": "/api/index?__path=/forecast/hourly" },
+    { "source": "/forecast/daily", "destination": "/api/index?__path=/forecast/daily" },
+    { "source": "/forecast/map", "destination": "/api/index?__path=/forecast/map" },
+    { "source": "/forecast/details", "destination": "/api/index?__path=/forecast/details" },
+    { "source": "/forecast/air", "destination": "/api/index?__path=/forecast/air" },
+    { "source": "/api/field", "destination": "/api/index?__path=/api/field" },
+    { "source": "/api/radar", "destination": "/api/index?__path=/api/radar" },
+    { "source": "/(.*)", "destination": "/api/index?__path=/not-found" }
+  ],
   "functions": {
     "api/index.py": {
       "excludeFiles": "{tests/**,Dockerfile,render.yaml,README.md}"

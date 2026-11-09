@@ -69,7 +69,7 @@ How the project is set up for Vercel:
 | File | Job |
 |---|---|
 | `api/index.py` | The function Vercel runs. It exposes the WSGI `app` from `cirrus/wsgi.py` |
-| `vercel.json` | Sends every path to that function; caches `/static/*` for a year; leaves tests and docs out of the bundle |
+| `vercel.json` | Sends each route to that function (the route travels as `?__path=...`, so it works even if Vercel shows the function its own address); caches `/static/*` for a year; leaves tests and docs out of the bundle |
 | `public/static/` | CSS and JS. Vercel serves everything under `public/` from its CDN without running Python |
 | `.python-version` | Asks for Python 3.13 (the app also runs on 3.12, Vercel's default) |
 
@@ -84,6 +84,8 @@ To check it, request the same page twice and look for `x-vercel-cache: HIT` in t
 Good to know:
 - Vercel functions are short-lived, so the in-memory cache and the daily call budget exist per function instance, not once for the whole site. The CDN caching above is your real protection for Open-Meteo's daily limit; `CIRRUS_DAILY_BUDGET` (set under Project Settings > Environment Variables) is only a per-instance guard.
 - The first deploy of this project has not been tested on Vercel itself (the author had no access to it). If the build fails, open the deployment's build log; the usual suspects are the Python version and the `api/index.py` path.
+- Adding a new page or API route to the app? Add a matching rewrite to `vercel.json` (a test fails if one is missing).
+- If a page shows "Page not found" on Vercel, open `https://<your-site>.vercel.app/anything?__debug=1`. It shows what Vercel passed to the function (`PATH_INFO`, `QUERY_STRING`, `resolved`); send that to whoever is helping you.
 - Run it locally the same way Vercel does: `vercel dev` (needs the CLI), or just `python run.py`.
 
 ### B. Render (no card, always the same Docker setup)
