@@ -1,28 +1,135 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
-    { "source": "/", "destination": "/api/index?__path=/" },
-    { "source": "/healthz", "destination": "/api/index?__path=/healthz" },
-    { "source": "/search", "destination": "/api/index?__path=/search" },
-    { "source": "/forecast/overview", "destination": "/api/index?__path=/forecast/overview" },
-    { "source": "/forecast/hourly", "destination": "/api/index?__path=/forecast/hourly" },
-    { "source": "/forecast/daily", "destination": "/api/index?__path=/forecast/daily" },
-    { "source": "/forecast/map", "destination": "/api/index?__path=/forecast/map" },
-    { "source": "/forecast/details", "destination": "/api/index?__path=/forecast/details" },
-    { "source": "/forecast/air", "destination": "/api/index?__path=/forecast/air" },
-    { "source": "/api/field", "destination": "/api/index?__path=/api/field" },
-    { "source": "/api/radar", "destination": "/api/index?__path=/api/radar" },
-    { "source": "/(.*)", "destination": "/api/index?__path=/not-found" }
+    {
+      "source": "/",
+      "destination": "/api/index?__path=/"
+    },
+    {
+      "source": "/healthz",
+      "destination": "/api/index?__path=/healthz"
+    },
+    {
+      "source": "/search",
+      "destination": "/api/index?__path=/search"
+    },
+    {
+      "source": "/forecast/overview",
+      "destination": "/api/index?__path=/forecast/overview"
+    },
+    {
+      "source": "/forecast/hourly",
+      "destination": "/api/index?__path=/forecast/hourly"
+    },
+    {
+      "source": "/forecast/daily",
+      "destination": "/api/index?__path=/forecast/daily"
+    },
+    {
+      "source": "/forecast/map",
+      "destination": "/api/index?__path=/forecast/map"
+    },
+    {
+      "source": "/forecast/details",
+      "destination": "/api/index?__path=/forecast/details"
+    },
+    {
+      "source": "/forecast/air",
+      "destination": "/api/index?__path=/forecast/air"
+    },
+    {
+      "source": "/api/field",
+      "destination": "/api/index?__path=/api/field"
+    },
+    {
+      "source": "/api/radar",
+      "destination": "/api/index?__path=/api/radar"
+    },
+    {
+      "source": "/api/hazards",
+      "destination": "/api/index?__path=/api/hazards"
+    },
+    {
+      "source": "/api/alerts",
+      "destination": "/api/index?__path=/api/alerts"
+    },
+    {
+      "source": "/api/geocode",
+      "destination": "/api/index?__path=/api/geocode"
+    },
+    {
+      "source": "/api/reverse",
+      "destination": "/api/index?__path=/api/reverse"
+    },
+    {
+      "source": "/api/config",
+      "destination": "/api/index?__path=/api/config"
+    },
+    {
+      "source": "/api/subscribe",
+      "destination": "/api/index?__path=/api/subscribe"
+    },
+    {
+      "source": "/api/subscribe/update",
+      "destination": "/api/index?__path=/api/subscribe/update"
+    },
+    {
+      "source": "/api/subscribe/status",
+      "destination": "/api/index?__path=/api/subscribe/status"
+    },
+    {
+      "source": "/api/confirm",
+      "destination": "/api/index?__path=/api/confirm"
+    },
+    {
+      "source": "/api/unsubscribe",
+      "destination": "/api/index?__path=/api/unsubscribe"
+    },
+    {
+      "source": "/api/cron/alerts",
+      "destination": "/api/index?__path=/api/cron/alerts"
+    },
+    {
+      "source": "/confirm",
+      "destination": "/api/index?__path=/confirm"
+    },
+    {
+      "source": "/unsubscribe",
+      "destination": "/api/index?__path=/unsubscribe"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/api/index?__path=/not-found"
+    }
   ],
   "functions": {
     "api/index.py": {
-      "excludeFiles": "{tests/**,Dockerfile,render.yaml,README.md}"
+      "excludeFiles": "{tests/**,Dockerfile,render.yaml,README.md}",
+      "maxDuration": 60
     }
   },
   "headers": [
     {
       "source": "/static/(.*)",
-      "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }]
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/static/sw.js",
+      "headers": [
+        {
+          "key": "Service-Worker-Allowed",
+          "value": "/"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=0, must-revalidate"
+        }
+      ]
     }
   ]
 }

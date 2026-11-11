@@ -244,12 +244,17 @@
     }
     add(d) {   // the server sends only the variables asked for, so more can be merged in later
       for (const [k, rows] of Object.entries(d.vars)) { this.vars[k] = rows.map((r) => Float32Array.from(r)); delete this._s[k]; }
-      const ws = this.vars.wind_speed_10m, wd = this.vars.wind_direction_10m;   // km/h, degrees the wind comes FROM
-      if (ws && wd) {
-        this.vars.u = ws.map((row, t) => row.map((s, k) => -s * Math.sin(wd[t][k] * RAD)));
-        this.vars.v = ws.map((row, t) => row.map((s, k) => -s * Math.cos(wd[t][k] * RAD)));
-        delete this._s.u; delete this._s.v;
+      for (const sfx of ['', '_850', '_700', '_500', '_250']) {   // surface wind and each height: km/h, degrees the wind comes FROM
+        const ws = this.vars[sfx ? `wind_speed${sfx}hPa` : 'wind_speed_10m'], wd = this.vars[sfx ? `wind_direction${sfx}hPa` : 'wind_direction_10m'];
+        if (!ws || !wd) continue;
+        const un = 'u' + sfx.replace('_', ''), vn = 'v' + sfx.replace('_', '');
+        this.vars[un] = ws.map((row, t) => row.map((s, k) => -s * Math.sin(wd[t][k] * RAD)));
+        this.vars[vn] = ws.map((row, t) => row.map((s, k) => -s * Math.cos(wd[t][k] * RAD)));
+        delete this._s[un]; delete this._s[vn];
       }
+    }
+    dirAt(ft, lat, lon, keys) {   // direction the wind comes FROM, degrees
+      return mod(Math.atan2(-this.sample(keys[0], ft, lat, lon), -this.sample(keys[1], ft, lat, lon)) / RAD, 360);
     }
     covers(b) {
       return b.west >= this.west && b.east <= this.west + (this.nx - 1) * this.dx
@@ -277,7 +282,7 @@
     sampleAll(ft, lat, lon) {
       const g = (n) => (this.has(n) ? this.sample(n, ft, lat, lon) : NaN), u = g('u'), v = g('v');
       return { temp: g('temperature_2m'), rh: g('relative_humidity_2m'), rain: g('precipitation'), pressure: g('pressure_msl'),
-        cloud: g('cloud_cover'), wind: g('wind_speed_10m'), gust: g('wind_gusts_10m'), dir: mod(Math.atan2(-u, -v) / RAD, 360) };
+        cloud: g('cloud_cover'), wind: g('wind_speed_10m'), gust: g('wind_gusts_10m'), cape: g('cape'), dir: mod(Math.atan2(-u, -v) / RAD, 360) };
     }
   }
 
@@ -292,6 +297,10 @@
     clouds: { min: 0, max: 100, stops: [[0, [235, 240, 247, 0]], [30, [215, 224, 235, .2]], [60, [205, 214, 226, .5]], [100, [240, 244, 250, .88]]] },
     pressure: { min: 980, max: 1040, stops: [[980, [120, 90, 200, .55]], [1000, [80, 150, 230, .45]], [1010, [110, 200, 200, .3]],
       [1016, [230, 220, 120, .35]], [1026, [245, 170, 80, .5]], [1040, [235, 90, 80, .6]]] },
+    cape: { min: 0, max: 4000, stops: [[0, [120, 200, 255, 0]], [250, [120, 200, 255, .2]], [500, [235, 225, 80, .5]], [1000, [250, 170, 50, .7]],
+      [2000, [240, 90, 50, .8]], [3000, [200, 40, 120, .85]], [4000, [130, 40, 170, .9]]] },
+    jet: { min: 0, max: 250, stops: [[0, [60, 120, 190, .35]], [30, [70, 170, 200, .5]], [60, [90, 200, 150, .58]], [90, [170, 215, 90, .62]],
+      [120, [240, 215, 70, .66]], [160, [245, 150, 50, .72]], [200, [235, 80, 60, .78]], [250, [190, 40, 140, .85]]] },
     humidity: { min: 10, max: 100, stops: [[10, [220, 170, 90, .5]], [40, [150, 200, 120, .35]], [70, [70, 170, 190, .5]], [100, [40, 90, 200, .7]]] },
   };
   function buildLut(stops, min, max) {
@@ -310,7 +319,12 @@
 
   const LAYERS = {
     wind: { label: 'Wind speed', kind: 'field', var: 'wind_speed_10m', vars: ['wind_speed_10m', 'wind_direction_10m'], ramp: 'wind', particles: true,
-      unit: (i) => (i ? 'mph' : 'km/h'), conv: (v, i) => (i ? v * 0.621371 : v), dec: () => 0 },
+      keys: ['u', 'v'], pxk: 1.6, unit: (i) => (i ? 'mph' : 'km/h'), conv: (v, i) => (i ? v * 0.621371 : v), dec: () => 0 },
+    upper: { label: 'Wind at 850 hPa', kind: 'field', var: 'wind_speed_850hPa', vars: ['wind_speed_850hPa', 'wind_direction_850hPa'], ramp: 'jet', particles: true,
+      keys: ['u850', 'v850'], pxk: 0.9, unit: (i) => (i ? 'mph' : 'km/h'), conv: (v, i) => (i ? v * 0.621371 : v), dec: () => 0 },
+    gust: { label: 'Wind gusts', kind: 'field', var: 'wind_gusts_10m', ramp: 'wind', unit: (i) => (i ? 'mph' : 'km/h'), conv: (v, i) => (i ? v * 0.621371 : v), dec: () => 0 },
+    storm: { label: 'Storm risk (CAPE)', kind: 'field', var: 'cape', ramp: 'cape', unit: () => 'J/kg', conv: (v) => v, dec: () => 0,
+      note: (v) => (v < 500 ? 'weak instability' : v < 1500 ? 'moderate instability' : v < 2500 ? 'strong instability' : 'extreme instability') },
     radar: { label: 'Rain radar', kind: 'radar' },
     temp: { label: 'Temperature', kind: 'field', var: 'temperature_2m', ramp: 'temp',
       unit: (i) => (i ? '°F' : '°C'), conv: (v, i) => (i ? v * 9 / 5 + 32 : v), dec: () => 0 },
@@ -322,6 +336,9 @@
     humidity: { label: 'Humidity', kind: 'field', var: 'relative_humidity_2m', ramp: 'humidity', unit: () => '%', conv: (v) => v, dec: () => 0 },
   };
 
+  const LEVELS = { 850: ['850 hPa', '1.5 km'], 700: ['700 hPa', '3 km'], 500: ['500 hPa', '5.5 km'], 250: ['Jet stream', '10 km'] };
+  const LEVEL_COLORS = { 1: '#F2D45C', 2: '#FFA63D', 3: '#F2573F', 4: '#B8279F' };
+  const LEVEL_NAMES = { 1: 'Advisory', 2: 'Watch', 3: 'Warning', 4: 'Extreme' };
   const ALL_VARS = ['temperature_2m', 'relative_humidity_2m', 'precipitation', 'pressure_msl', 'cloud_cover', 'wind_speed_10m', 'wind_direction_10m', 'wind_gusts_10m'];
 
   /* ---------------------------------------------------------------- field renderers */
@@ -437,8 +454,8 @@
     }
   }
 
-  function drawArrows(ctx, map, field, ft) {          // calm alternative to particles (reduced motion)
-    const { w, h } = map.size, us = field.slice('u', ft), vs = field.slice('v', ft);
+  function drawArrows(ctx, map, field, ft, keys) {          // calm alternative to particles (reduced motion)
+    const { w, h } = map.size, us = field.slice(keys[0], ft), vs = field.slice(keys[1], ft);
     ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.fillStyle = 'rgba(255,255,255,.9)'; ctx.lineWidth = 1.5; ctx.lineCap = 'round';
     for (let y = 30; y < h; y += 56) for (let x = 30; x < w; x += 56) {
       const [lat, lon] = map.latLonAt(x, y), u = field.interp(us, lat, lon), v = field.interp(vs, lat, lon);
@@ -451,7 +468,6 @@
   }
 
   /* ---------------------------------------------------------------- animated wind */
-  const PX_PER_KMH = 1.6;               // pixels per second for each km/h of wind
   class WindParticles {
     constructor(map, canvas) {
       Object.assign(this, { map, cv: canvas, step: 14, U: null, V: null, cols: 0, rows: 0, vu: 0, vv: 0, parts: [], ready: false });
@@ -469,16 +485,16 @@
       p.x = p.px = Math.random() * w; p.y = p.py = Math.random() * h;
       p.life = 0.9 + Math.random() * 1.8; p.age = randomAge ? Math.random() * p.life : 0;
     }
-    build(field, ft) {
+    build(field, ft, keys, pxk) {   // pxk: pixels per second for each km/h of wind
       const { w, h } = this.map.size, st = this.step;
       this.cols = Math.ceil(w / st) + 2; this.rows = Math.ceil(h / st) + 2;
       const n = this.cols * this.rows;
       if (!this.U || this.U.length !== n) { this.U = new Float32Array(n); this.V = new Float32Array(n); }
-      const us = field.slice('u', ft), vs = field.slice('v', ft);
+      const us = field.slice(keys[0], ft), vs = field.slice(keys[1], ft);
       for (let j = 0; j < this.rows; j++) for (let i = 0; i < this.cols; i++) {
         const [lat, lon] = this.map.latLonAt(i * st, j * st), k = j * this.cols + i;
-        this.U[k] = field.interp(us, lat, lon) * PX_PER_KMH;
-        this.V[k] = -field.interp(vs, lat, lon) * PX_PER_KMH;       // screen y points down
+        this.U[k] = field.interp(us, lat, lon) * pxk;
+        this.V[k] = -field.interp(vs, lat, lon) * pxk;       // screen y points down
       }
       this.ready = true;
     }
@@ -517,6 +533,45 @@
     }
   }
 
+  /* ---------------------------------------------------------------- basemaps, sun, hazard symbols */
+  const OSM = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+  const BASES = {   // NASA GIBS imagery needs no key; yesterday's composite is complete everywhere
+    dark: { name: 'Dark', max: 19, tpl: () => OSM },
+    light: { name: 'Light', max: 19, tpl: () => OSM },
+    sat: { name: 'Satellite', max: 9, tpl: () => 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/'
+      + new Date(Date.now() - 864e5).toISOString().slice(0, 10) + '/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg' },
+  };
+  function sunPosition(ms) {   // low-precision solar position (good to about a degree): the point where the sun is overhead
+    const d = ms / 864e5 + 2440587.5 - 2451545.0, g = (357.529 + 0.98560028 * d) * RAD, q = 280.459 + 0.98564736 * d;
+    const L = (q + 1.915 * Math.sin(g) + 0.02 * Math.sin(2 * g)) * RAD, e = (23.439 - 3.6e-7 * d) * RAD;
+    const dec = Math.asin(Math.sin(e) * Math.sin(L)), ra = Math.atan2(Math.cos(e) * Math.sin(L), Math.cos(L));
+    const gmst = mod(18.697374558 + 24.06570982441908 * d, 24) * 15;
+    return { lat: dec / RAD, lon: mod(ra / RAD - gmst + 180, 360) - 180 };
+  }
+  function solveLat(A, B, alt, prefer) {   // latitude where the sun's altitude equals `alt`, for one longitude (A, B from the sun's position)
+    const R = Math.hypot(A, B) || 1e-9, a = Math.asin(clamp(Math.sin(alt) / R, -1, 1)), psi = Math.atan2(B, A);
+    const wrap = (x) => Math.atan2(Math.sin(x), Math.cos(x));
+    const c = [wrap(a - psi), wrap(Math.PI - a - psi)].filter((x) => Math.abs(x) <= Math.PI / 2 + 1e-9);
+    if (!c.length) return prefer ?? 0;
+    return prefer == null ? c[0] : c.reduce((p, q) => (Math.abs(q - prefer) < Math.abs(p - prefer) ? q : p));
+  }
+  function kmBetween(a, b, c, d) {
+    const p = Math.sin((c - a) * RAD / 2) ** 2 + Math.cos(a * RAD) * Math.cos(c * RAD) * Math.sin((d - b) * RAD / 2) ** 2;
+    return 12742 * Math.asin(Math.min(1, Math.sqrt(p)));
+  }
+  const ago = (iso) => { const h = (Date.now() - Date.parse(iso)) / 36e5; return h < 1 ? 'just now' : h < 48 ? `${Math.round(h)} h ago` : `${Math.round(h / 24)} days ago`; };
+  const el = (tag, text, cls) => { const n = document.createElement(tag); if (text != null) n.textContent = text; if (cls) n.className = cls; return n; };
+  function hazardGlyph(c, kind, s) {   // small symbol drawn inside the event marker
+    c.beginPath();
+    if (kind === 'earthquake') { c.moveTo(-s, 0); c.lineTo(-s / 2, -s); c.lineTo(0, s); c.lineTo(s / 2, -s); c.lineTo(s, 0); }
+    else if (kind === 'cyclone') { c.arc(0, 0, s * 0.95, 0.35 * Math.PI, 1.85 * Math.PI); c.moveTo(s * 0.4, 0); c.arc(0, 0, s * 0.4, 0, 1.5 * Math.PI); }
+    else if (kind === 'flood') { for (const dy of [-s * 0.4, s * 0.4]) { c.moveTo(-s, dy); c.quadraticCurveTo(-s / 2, dy - s * 0.6, 0, dy); c.quadraticCurveTo(s / 2, dy + s * 0.6, s, dy); } }
+    else if (kind === 'volcano') { c.moveTo(-s, s * 0.8); c.lineTo(-s * 0.25, -s * 0.5); c.lineTo(s * 0.25, -s * 0.5); c.lineTo(s, s * 0.8); c.closePath(); }
+    else if (kind === 'wildfire') { c.moveTo(0, -s); c.quadraticCurveTo(s, 0, 0, s); c.quadraticCurveTo(-s, 0, 0, -s); }
+    else { c.moveTo(s * 0.25, -s); c.lineTo(-s * 0.5, s * 0.1); c.lineTo(0, s * 0.1); c.lineTo(-s * 0.25, s); c.lineTo(s * 0.5, -s * 0.1); c.lineTo(0, -s * 0.1); c.closePath(); }
+    c.stroke();
+  }
+
   /* ---------------------------------------------------------------- the controller */
   const PREFS_KEY = 'cirrus-map-prefs';
   const loadPrefs = () => { try { return JSON.parse(localStorage.getItem(PREFS_KEY)) || {}; } catch { return {}; } };
@@ -534,21 +589,25 @@
 
       this.stage = $('#map-stage', card); this.box = $('#map-layers', card);
       const mk = (cls) => { const c = document.createElement('canvas'); c.className = 'cv ' + cls; this.box.appendChild(c); return c; };
-      this.cv = { base: mk('cv-base'), radar: mk('cv-radar'), field: mk('cv-field'), wind: mk('cv-wind') };
+      this.cv = { base: mk('cv-base'), radar: mk('cv-radar'), field: mk('cv-field'), night: mk('cv-night'), wind: mk('cv-wind'), hz: mk('cv-hz') };
       this.off = document.createElement('canvas');
       this.map = new SlippyMap(this.box, { lat: this.place.lat, lon: this.place.lon, zoom: 6 });
       this.base = new TileLayer(this.map, this.cv.base, { template: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', maxNative: 19 });
       this.radarTiles = new TileLayer(this.map, this.cv.radar, { maxNative: 7 });
       this.wind = new WindParticles(this.map, this.cv.wind);
-      this.fctx = this.cv.field.getContext('2d');
+      this.fctx = this.cv.field.getContext('2d'); this.nctx = this.cv.night.getContext('2d'); this.hctx = this.cv.hz.getContext('2d');
 
       Object.assign(this, { field: null, radar: null, ft: 0, ridx: 0, playing: false, acc: 0, seq: 0, layerId: null,
-        windReset: true, windDirty: true, lastBuild: 0, lastFrame: 0, wasMoving: true, layerDirty: true, timeDirty: true, radarCleared: true });
+        windReset: true, windDirty: true, lastBuild: 0, lastFrame: 0, wasMoving: true, layerDirty: true, timeDirty: true, radarCleared: true,
+        hz: { events: [], loaded: false }, hzOn: this.prefs.hazards !== false, nightOn: !!this.prefs.night, hzDirty: true, lastHz: 0,
+        level: LEVELS[this.prefs.level] ? this.prefs.level : 850 });
 
       this.ui = {
         range: $('#tl-range', card), play: $('#btn-play', card), now: $('#btn-now', card), start: $('#tl-start', card),
         label: $('#tl-now', card), end: $('#tl-end', card), legend: $('#legend', card), chip: $('#cursor-chip', card),
-        popup: $('#popup', card), status: $('#map-status', card), pin: $('#pin', card),
+        popup: $('#popup', card), status: $('#map-status', card), pin: $('#pin', card), levels: $('#alt-levels', card),
+        hzBtn: $('#tg-hazards', card), nightBtn: $('#tg-night', card), locate: $('#btn-locate', card), hzCount: $('#hz-count', card),
+        baseBtn: $('#btn-base', card),
       };
       this.ui.pin.querySelector('.pin-label').textContent = this.place.name;
       this.pickPin = this.ui.pin.cloneNode(true); this.pickPin.id = 'pin-picked'; this.pickPin.classList.add('picked');
@@ -560,11 +619,15 @@
       this.map.on('viewchange', () => { this.windReset = true; this.windDirty = true; this.layerDirty = true; this.hideChip(); });
       this.map.on('hover', (lat, lon, x, y) => this.onHover(lat, lon, x, y));
       this.map.on('leave', () => this.hideChip());
-      this.map.on('click', (lat, lon, x, y) => this.openPopup(lat, lon));
+      this.map.on('click', (lat, lon, x, y) => this.onClick(lat, lon, x, y));
       this.bindUi();
       this.onResize();
-      this.setBasemap(this.prefs.base || 'dark');
+      this.setBasemap(BASES[this.prefs.base] ? this.prefs.base : 'dark', true);
       this.setOpacity(this.prefs.opacity ?? 85);
+      this.setLevel(this.level, true);
+      this.setToggle('hz', this.hzOn, true); this.setToggle('night', this.nightOn, true);
+      this.syncPlaces(); document.addEventListener('cirrus:places', () => this.syncPlaces());
+      this.loadHazards();
       const start = this.prefs.layer && LAYERS[this.prefs.layer] ? this.prefs.layer : (LAYERS[d.layer] ? d.layer : 'wind');
       this.setLayer(start === 'radar' ? 'wind' : start, true);
       this.loadField(true);
@@ -586,7 +649,11 @@
       u.now.addEventListener('click', () => { this.stopPlay(); if (this.layerId === 'radar') this.ridx = (this.radar?.frames.length || 1) - 1; else this.ft = 0; this.timeChanged(); });
       $('#zoom-in', c).addEventListener('click', () => this.map.zoomBy(1));
       $('#zoom-out', c).addEventListener('click', () => this.map.zoomBy(-1));
-      $('#btn-base', c).addEventListener('click', () => this.setBasemap(this.stage.dataset.basemap === 'dark' ? 'light' : 'dark'));
+      u.baseBtn.addEventListener('click', () => { const ids = Object.keys(BASES); this.setBasemap(ids[(ids.indexOf(this.stage.dataset.basemap) + 1) % ids.length]); });
+      u.hzBtn.addEventListener('click', () => this.setToggle('hz', !this.hzOn));
+      u.nightBtn.addEventListener('click', () => this.setToggle('night', !this.nightOn));
+      u.locate.addEventListener('click', () => this.locateMe());
+      u.levels.querySelectorAll('[data-level]').forEach((b) => b.addEventListener('click', () => this.setLevel(+b.dataset.level)));
       $('#btn-full', c).addEventListener('click', () => this.toggleFull());
       $('.opacity-range', c).addEventListener('input', (e) => this.setOpacity(+e.target.value));
       this.stage.addEventListener('keydown', (e) => {
@@ -600,8 +667,97 @@
         e.preventDefault();
       });
     }
-    persist() { savePrefs({ ...this.prefs, layer: this.layerId, base: this.stage.dataset.basemap, opacity: this.opacityValue }); }
-    setBasemap(b) { this.stage.dataset.basemap = b; this.persist(); }
+    persist() {
+      if (!this.layerId) return;
+      savePrefs({ ...this.prefs, layer: this.layerId, base: this.stage.dataset.basemap, opacity: this.opacityValue, level: this.level, hazards: this.hzOn, night: this.nightOn });
+    }
+    setBasemap(b, silent) {
+      const def = BASES[b], ids = Object.keys(BASES), next = BASES[ids[(ids.indexOf(b) + 1) % ids.length]].name;
+      this.stage.dataset.basemap = b;
+      this.base.maxNative = def.max; this.base.setTemplate(def.tpl());
+      this.ui.baseBtn.setAttribute('aria-label', `Basemap: ${def.name}. Switch to ${next}`); this.ui.baseBtn.title = `Basemap: ${def.name} (click for ${next})`;
+      if (!silent) this.persist();
+    }
+    setLevel(lv, silent) {   // the height of the "Upper-air wind" layer
+      if (!LEVELS[lv]) return;
+      this.level = lv;
+      Object.assign(LAYERS.upper, { label: `Wind at ${LEVELS[lv][0]}, about ${LEVELS[lv][1]} up`, var: `wind_speed_${lv}hPa`, vars: [`wind_speed_${lv}hPa`, `wind_direction_${lv}hPa`],
+        keys: ['u' + lv, 'v' + lv], pxk: lv === 250 ? 0.6 : lv === 500 ? 0.8 : 1.1 });
+      this.ui.levels.querySelectorAll('[data-level]').forEach((b) => b.setAttribute('aria-pressed', String(+b.dataset.level === lv)));
+      if (this.layerId === 'upper') {
+        this.hideChip(); this.updateLegend(); this.layerDirty = this.windReset = this.windDirty = true;
+        if (this.field) this.loadField();
+      }
+      if (!silent) this.persist();
+    }
+    setToggle(kind, on, silent) {
+      if (kind === 'hz') {
+        this.hzOn = on; this.ui.hzBtn.setAttribute('aria-pressed', String(on));
+        if (on && !this.hz.loaded) this.loadHazards();
+        if (!on && this.picked?.hazard) this.closePopup();
+      } else { this.nightOn = on; this.ui.nightBtn.setAttribute('aria-pressed', String(on)); }
+      this.hzDirty = true; this.layerDirty = true; this.map.invalidate();
+      if (!silent) this.persist();
+    }
+    flyTo(lat, lon, zoom) { this.map.setView(lat, lon, zoom); }
+    async locateMe() {
+      this.status('Finding you…');
+      try {
+        const pos = window.cirrusAlerts?.locate ? await window.cirrusAlerts.locate()
+          : await new Promise((ok, no) => navigator.geolocation.getCurrentPosition((p) => ok({ lat: p.coords.latitude, lon: p.coords.longitude }), no, { timeout: 10000, maximumAge: 600000 }));
+        this.status(''); this.flyTo(pos.lat, pos.lon, Math.max(this.map.zoom, 8));
+      } catch { this.status('Location is blocked or unavailable. Allow location access for this site to use it.'); setTimeout(() => this.status(''), 5000); }
+    }
+    syncPlaces() {   // "Home" and "You are here" markers, kept up to date by alerts.js
+      const pl = window.cirrusPlaces || {};
+      for (const kind of ['home', 'here']) {
+        let m = this['mk_' + kind];
+        if (!pl[kind]) { if (m) m.hidden = true; continue; }
+        if (!m) {
+          m = this['mk_' + kind] = el('div', null, 'pin my ' + kind);
+          m.append(el('span', null, 'dot'), el('span', kind === 'home' ? 'Home' : 'You are here', 'pin-label'));
+          this.ui.pin.after(m);
+        }
+        m.hidden = false; m._p = pl[kind];
+      }
+      this.map.invalidate();
+      if (pl.focus && pl[pl.focus]) this.flyTo(pl[pl.focus].lat, pl[pl.focus].lon, Math.max(this.map.zoom, 7));
+    }
+    async loadHazards() {
+      try {
+        const res = await fetch('/api/hazards'), d = await res.json();
+        if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
+        this.hz = { events: d.events || [], updated: d.updated, loaded: true };
+        this.ui.hzCount.textContent = this.hz.events.length ? String(this.hz.events.length) : '';
+        this.ui.hzBtn.title = `${this.hz.events.length} active events: earthquakes, cyclones, floods, volcanoes, wildfires`;
+        this.hzDirty = true; this.map.invalidate();
+      } catch { this.ui.hzBtn.title = 'World events are not available right now'; }
+    }
+    hzRadius(e) { return e.kind === 'earthquake' ? clamp(5 + ((e.mag || 5) - 4) * 3.2, 6, 20) : 9 + e.level * 1.5; }
+    onClick(lat, lon, x, y) {
+      if (this.hzOn) {
+        let best = null, bd = 1e9;
+        for (const e of this.hz.events) {
+          const [ex, ey] = this.map.toScreen(e.lat, e.lon), d = Math.hypot(ex - x, ey - y);
+          if (d <= this.hzRadius(e) + 8 && d < bd) { best = e; bd = d; }
+        }
+        if (best) { this.openHazard(best); return; }
+      }
+      this.openPopup(lat, lon);
+    }
+    openHazard(e) {
+      this.picked = { lat: e.lat, lon: e.lon, hazard: e };
+      const p = this.ui.popup; p.textContent = '';
+      p.append(el('h3', e.title));
+      const badge = el('span', `${LEVEL_NAMES[e.level]} · ${e.kind}`, 'lvl-badge'); badge.style.background = LEVEL_COLORS[e.level]; badge.style.color = e.level === 4 ? '#fff' : '#1A1204';
+      p.append(badge, el('div', `${ago(e.time)} · ${e.src}`, 'muted'));
+      if (e.detail) p.append(el('p', e.detail, 'hz-detail'));
+      const home = window.cirrusPlaces?.home;
+      if (home) p.append(el('div', `About ${Math.round(kmBetween(home.lat, home.lon, e.lat, e.lon)).toLocaleString()} km from Home`, 'hz-detail'));
+      const x = el('button', '×', 'x'); x.type = 'button'; x.setAttribute('aria-label', 'Close'); x.onclick = () => this.closePopup(); p.append(x);
+      if (/^https:\/\//.test(e.url || '')) { const a = el('a', 'Source details', 'btn'); a.href = e.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; p.append(a); }
+      p.hidden = false; this.pickPin.hidden = true; this.hzDirty = true; this.map.invalidate();
+    }
     setOpacity(v) {
       this.opacityValue = v;
       this.cv.field.style.opacity = this.cv.radar.style.opacity = v / 100;
@@ -703,6 +859,7 @@
       if (!LAYERS[id]) return;
       if (id === 'radar' && !this.radar) return;
       this.layerId = id;
+      this.ui.levels.hidden = id !== 'upper';
       this.card.querySelectorAll('[data-layer]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.layer === id)));
       this.stopPlay(); this.hideChip();
       if (id === 'radar') this.radarTiles.setTemplate(this.radarTemplate()); else { this.radarTiles.template = this.radarTiles.prev = null; }
@@ -783,7 +940,8 @@
       if (Number.isNaN(v)) { chip.hidden = true; return; }
       chip.textContent = this.fmtValue(L, v);
       const small = document.createElement('small');
-      if (L.var === 'wind_speed_10m') small.textContent = 'from the ' + compass(this.field.sampleAll(this.ft, lat, lon).dir);
+      if (L.particles) small.textContent = 'from the ' + compass(this.field.dirAt(this.ft, lat, lon, L.keys));
+      else if (L.note) small.textContent = L.note(v);
       else small.textContent = `${lat.toFixed(2)}°, ${lon.toFixed(2)}°`;
       chip.append(small); chip.hidden = false;
     }
@@ -812,6 +970,7 @@
         const rows = [['Temperature', this.fmtValue(g.temp, s.temp)], ['Wind', `${this.fmtValue(g.wind, s.wind)} ${compass(s.dir)}`],
           ['Gusts', this.fmtValue(g.wind, s.gust)], ['Rain', this.fmtValue(g.rain, s.rain)], ['Cloud', `${s.cloud.toFixed(0)}%`],
           ['Humidity', `${s.rh.toFixed(0)}%`], ['Pressure', imp ? `${(s.pressure * 0.02953).toFixed(2)} inHg` : `${s.pressure.toFixed(0)} hPa`]];
+        if (!Number.isNaN(s.cape)) rows.push(['Storm energy', `${s.cape.toFixed(0)} J/kg`]);
         const grid = document.createElement('div'); grid.className = 'vals';
         for (const [k, v] of rows) { const d = document.createElement('div'); d.append(k); const st = document.createElement('strong'); st.textContent = v; d.append(st); grid.append(d); }
         p.append(grid);
@@ -821,7 +980,7 @@
       a.textContent = 'Full forecast here'; p.append(a);
       p.hidden = false; this.pickPin.hidden = false; this.map.invalidate();
     }
-    closePopup() { this.ui.popup.hidden = true; this.pickPin.hidden = true; this.picked = null; }
+    closePopup() { this.ui.popup.hidden = true; this.pickPin.hidden = true; this.picked = null; this.hzDirty = true; this.map.invalidate(); }
     placeOverlays() {
       const { w, h } = this.map.size, put = (el, lat, lon) => {
         const [x, y] = this.map.toScreen(lat, lon);
@@ -830,6 +989,11 @@
         return [x, y];
       };
       put(this.ui.pin, this.place.lat, this.place.lon);
+      for (const k of ['mk_home', 'mk_here']) {   // hidden while the place being viewed is the same spot, so labels do not overlap
+        const mk = this[k]; if (!mk || mk.hidden) continue;
+        const same = kmBetween(mk._p.lat, mk._p.lon, this.place.lat, this.place.lon) < 3;
+        mk.style.display = same ? 'none' : ''; if (!same) put(mk, mk._p.lat, mk._p.lon);
+      }
       if (this.picked) {
         const [x, y] = put(this.pickPin, this.picked.lat, this.picked.lon), p = this.ui.popup, ph = p.offsetHeight || 220;
         p.style.left = `${clamp(x - 125, 8, Math.max(8, w - 258))}px`;
@@ -846,9 +1010,53 @@
       if (L.kind === 'field' && this.field && this.field.has(L.var)) {
         drawHeat(this.fctx, map, this.off, this.field, this.ft, L);
         if (L.isobars) drawIsobars(this.fctx, map, this.field, this.ft);
-        if (L.particles && reducedMotion && this.field.has('u')) drawArrows(this.fctx, map, this.field, this.ft);
+        if (L.particles && reducedMotion && this.field.has(L.keys[0])) drawArrows(this.fctx, map, this.field, this.ft, L.keys);
       } else this.fctx.clearRect(0, 0, w, h);
+      this.drawNight();
       this.placeOverlays();
+    }
+    drawNight() {   // the dark side of the Earth for the time shown on the timeline, with soft twilight bands
+      const { w, h, dpr } = this.map.size, c = this.nctx;
+      c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, w, h);
+      if (!this.nightOn) return;
+      const sun = sunPosition(this.field ? this.field.times[0] + this.ft * 3600e3 : Date.now());
+      const dec = Math.abs(sun.lat) < 0.05 ? (sun.lat < 0 ? -0.05 : 0.05) : sun.lat, sunNorth = dec >= 0, kx = 360 / this.map.frame().s;
+      const A = Math.sin(dec * RAD);
+      c.fillStyle = 'rgba(4,10,34,.16)';
+      for (const alt of [0, -6, -12, -18]) {
+        c.beginPath();
+        for (let x = 0; x <= w + 4; x += 4) {
+          const lon = this.map.lon + (x - w / 2) * kx, B = Math.cos(dec * RAD) * Math.cos((lon - sun.lon) * RAD);
+          const phi = solveLat(A, B, alt * RAD, solveLat(A, B, 0, null)) / RAD, y = this.map.toScreen(phi, this.map.lon)[1];
+          if (x === 0) c.moveTo(x, y); else c.lineTo(x, y);
+        }
+        const edge = sunNorth ? h + 60 : -60;
+        c.lineTo(w + 4, edge); c.lineTo(0, edge); c.closePath(); c.fill();
+      }
+    }
+    drawHazards(now) {
+      const { w, h, dpr } = this.map.size, c = this.hctx;
+      c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, w, h);
+      if (!this.hzOn) return;
+      const sel = this.picked?.hazard, mpp = (lat) => 156543.03392 * Math.cos(lat * RAD) / 2 ** this.map.zoom;
+      c.lineJoin = c.lineCap = 'round';
+      for (const e of this.hz.events) {
+        const [x, y] = this.map.toScreen(e.lat, e.lon);
+        if (x < -40 || y < -40 || x > w + 40 || y > h + 40) continue;
+        const r = this.hzRadius(e), col = LEVEL_COLORS[e.level];
+        if (e === sel) {   // how far the event matters
+          c.setLineDash([6, 6]); c.strokeStyle = col; c.lineWidth = 2; c.fillStyle = col + '22';
+          c.beginPath(); c.arc(x, y, Math.max(r + 4, e.radius_km * 1000 / mpp(e.lat)), 0, 2 * Math.PI); c.fill(); c.stroke(); c.setLineDash([]);
+        }
+        if (e.level >= 3 && !reducedMotion) {   // a slow pulse draws the eye to serious events
+          const t = ((now / 1600) + e.lon / 50) % 1;
+          c.strokeStyle = col; c.globalAlpha = (1 - t) * 0.75; c.lineWidth = 2;
+          c.beginPath(); c.arc(x, y, r + t * 20, 0, 2 * Math.PI); c.stroke(); c.globalAlpha = 1;
+        }
+        c.fillStyle = col; c.strokeStyle = '#0D141B'; c.lineWidth = 2;
+        c.beginPath(); c.arc(x, y, r, 0, 2 * Math.PI); c.fill(); c.stroke();
+        c.save(); c.translate(x, y); c.lineWidth = 1.7; hazardGlyph(c, e.kind, r * 0.55); c.restore();
+      }
     }
     tick(now) {
       const dt = Math.min(50, now - (this.lastFrame || now));
@@ -859,13 +1067,16 @@
       const moving = map.moving;
       if (this.wasMoving && !moving) this.loadField();
       this.wasMoving = moving;
-      if (map.dirty || this.layerDirty || this.timeDirty) { map.dirty = this.layerDirty = this.timeDirty = false; this.render(); }
+      const redraw = map.dirty || this.layerDirty || this.timeDirty;
+      if (redraw) { map.dirty = this.layerDirty = this.timeDirty = false; this.render(); }
+      const pulse = this.hzOn && !reducedMotion && now - this.lastHz > 33 && this.hz.events.some((e) => e.level >= 3);
+      if (redraw || this.hzDirty || pulse) { this.hzDirty = false; this.lastHz = now; this.drawHazards(now); }
       const L = LAYERS[this.layerId];
-      if (L.particles && this.field && this.field.has('u') && !reducedMotion) {
+      if (L.particles && this.field && this.field.has(L.keys[0]) && !reducedMotion) {
         if (moving) { if (this.windReset) { this.wind.clear(); this.wind.ready = false; } }
         else {
           if (this.windDirty && (now - this.lastBuild > 110 || this.windReset)) {
-            this.wind.build(this.field, this.ft);
+            this.wind.build(this.field, this.ft, L.keys, L.pxk);
             this.lastBuild = now; this.windDirty = false;
             if (this.windReset) { this.wind.reset(); this.windReset = false; }
           }

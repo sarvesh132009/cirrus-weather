@@ -1,0 +1,17 @@
+# Runs the e-mail alert check every 30 minutes (free on GitHub). Needs two repository secrets, see README "Alerts by e-mail".
+name: Check alerts
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ask the site to check alerts
+        env:
+          SITE_URL: ${{ secrets.SITE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          test -n "$SITE_URL" && test -n "$CRON_SECRET" || { echo "Add the SITE_URL and CRON_SECRET secrets first"; exit 1; }
+          curl -fsS --max-time 100 -H "Authorization: Bearer $CRON_SECRET" "${SITE_URL%/}/api/cron/alerts"

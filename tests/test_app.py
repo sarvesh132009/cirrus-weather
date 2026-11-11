@@ -90,7 +90,7 @@ class MapApi(unittest.TestCase):
         self.assertEqual(len(d["times"]), config.FIELD_HOURS)
         n = d["nx"] * d["ny"]
         self.assertLessEqual(n, config.MAX_GRID_POINTS + 40)
-        for name in openmeteo.FIELD_VARS:
+        for name in openmeteo.CORE_VARS:
             self.assertEqual(len(d["vars"][name]), config.FIELD_HOURS)
             self.assertEqual(len(d["vars"][name][0]), n)
         # the grid must cover the requested view
@@ -119,7 +119,7 @@ class MapApi(unittest.TestCase):
         self.assertEqual(set(d["vars"]), {"wind_speed_10m", "wind_direction_10m"})
         self.assertEqual(server.dispatch(q + "&vars=bogus").status, 400)
         full = json.loads(server.dispatch(q).body)
-        self.assertEqual(set(full["vars"]), set(openmeteo.FIELD_VARS))  # no vars param keeps the old behaviour
+        self.assertEqual(set(full["vars"]), set(openmeteo.CORE_VARS))  # no vars param: the everyday layers
         self.assertLess(len(server.dispatch(q + "&vars=temperature_2m").body), len(server.dispatch(q).body) / 4)
 
     def test_radar_endpoint(self):

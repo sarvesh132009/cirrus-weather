@@ -153,14 +153,16 @@ def air_quality(lat: float, lon: float) -> dict:
 
 # ---- map grid ----------------------------------------------------------------------------------
 
-def grid_points(points: list[tuple[float, float]], hours: int) -> tuple[list[dict], list[str]]:
+def grid_points(points: list[tuple[float, float]], hours: int, names: tuple[str, ...] = ()) -> tuple[list[dict], list[str]]:
     """Synthetic hourly series for each (lat, lon). Smooth fields that drift over time."""
     now = datetime.now(UTC).replace(minute=0, second=0, microsecond=0).replace(tzinfo=None)
     times = [_iso(now + timedelta(hours=t)) for t in range(hours)]
+    want = set(names) or {"temperature_2m", "relative_humidity_2m", "precipitation", "pressure_msl", "cloud_cover",
+                          "wind_speed_10m", "wind_direction_10m", "wind_gusts_10m"}
+    levels = [int(n.split("_")[2].removesuffix("hPa")) for n in want if n.startswith("wind_speed_") and n.endswith("hPa")]
     out = []
     for lat, lon in points:
-        s: dict[str, list] = {k: [] for k in ("temperature_2m", "relative_humidity_2m", "precipitation", "pressure_msl",
-                                              "cloud_cover", "wind_speed_10m", "wind_direction_10m", "wind_gusts_10m")}
+        s: dict[str, list] = {k: [] for k in want}
         for t in range(hours):
             local_hr = (now.hour + t + lon / 15) % 24
             u = 7 * math.sin(lat * 0.22 + lon * 0.05 - t * 0.04) + 4 * math.cos(lon * 0.17 + t * 0.03) + 4
@@ -168,13 +170,54 @@ def grid_points(points: list[tuple[float, float]], hours: int) -> tuple[list[dic
             speed = math.hypot(u, v) * 3.6
             cloud = _clamp(50 + 45 * math.sin(lat * 0.35 + lon * 0.28 - t * 0.07) * math.cos(lat * 0.11), 0, 100)
             rain = max(0.0, math.sin(lat * 0.5 + lon * 0.37 + t * 0.09) * math.sin(lon * 0.21 - lat * 0.31 - t * 0.05) - 0.45) * 18
-            s["temperature_2m"].append(32 - 0.55 * abs(lat - 8) + 3 * math.sin(lon * 0.3 + lat * 0.2) + 4 * math.sin(2 * math.pi * (local_hr - 9) / 24))
-            s["relative_humidity_2m"].append(_clamp(45 + 0.4 * cloud + (25 if rain > 0 else 0), 20, 100))
-            s["precipitation"].append(rain)
-            s["pressure_msl"].append(1010 + 9 * math.sin(lon * 0.12 + t * 0.02) * math.cos(lat * 0.16) + 4 * math.sin(lat * 0.3 - lon * 0.1))
-            s["cloud_cover"].append(cloud)
-            s["wind_speed_10m"].append(speed)
-            s["wind_direction_10m"].append(math.degrees(math.atan2(-u, -v)) % 360)
-            s["wind_gusts_10m"].append(speed * 1.5)
+            vals = {
+                "temperature_2m": 32 - 0.55 * abs(lat - 8) + 3 * math.sin(lon * 0.3 + lat * 0.2) + 4 * math.sin(2 * math.pi * (local_hr - 9) / 24),
+                "relative_humidity_2m": _clamp(45 + 0.4 * cloud + (25 if rain > 0 else 0), 20, 100),
+                "precipitation": rain,
+                "pressure_msl": 1010 + 9 * math.sin(lon * 0.12 + t * 0.02) * math.cos(lat * 0.16) + 4 * math.sin(lat * 0.3 - lon * 0.1),
+                "cloud_cover": cloud, "wind_speed_10m": speed, "wind_direction_10m": math.degrees(math.atan2(-u, -v)) % 360,
+                "wind_gusts_10m": speed * 1.5,
+                # storm cells: patchy instability that drifts east
+                "cape": max(0.0, 3600 * math.sin(lat * 0.45 + lon * 0.3 - t * 0.06) * math.sin(lon * 0.2 - lat * 0.25 + t * 0.03) - 400),
+            }
+            for lv in levels:   # winds speed up and veer with height; a jet core sits near 28 N at 250 hPa
+                boost = {850: 1.5, 700: 2.2, 500: 3.2, 250: 5.0}.get(lv, 2.0)
+                jet = 110 * math.exp(-(((lat - 28 - 3 * math.sin(lon * 0.12)) / 6.5) ** 2)) if lv == 250 else 0
+                vals[f"wind_speed_{lv}hPa"] = speed * boost + jet + 4
+                vals[f"wind_direction_{lv}hPa"] = (270 + 25 * math.sin(lat * 0.1 + t * 0.02) + (15 if lv < 700 else 0)) % 360
+            for k in want:
+                s[k].append(vals[k])
         out.append(s)
     return out, times
+
+
+# ---- hazards (earthquakes, cyclones, floods ...) --------------------------------------------------------------
+
+def reverse(lat: float, lon: float) -> dict:
+    n, a, c, *_ = min(CITIES, key=lambda r: (r[3] - lat) ** 2 + (r[4] - lon) ** 2)
+    return {"name": n, "region": a, "country": c}
+
+
+def hazards() -> dict:
+    """A few invented events around India so the alert screens can be tried offline."""
+    now = datetime.now(UTC).replace(microsecond=0)
+
+    def ago(hours: float) -> str:
+        return (now - timedelta(hours=hours)).isoformat().replace("+00:00", "Z")
+
+    events = [
+        {"id": "demo:eq1", "kind": "earthquake", "title": "M 6.1 earthquake, Andaman Islands region", "level": 3, "lat": 11.9, "lon": 92.9,
+         "time": ago(2), "mag": 6.1, "radius_km": 300, "detail": "Depth 35 km. Offshore quake: follow official tsunami warnings.", "src": "USGS (demo)", "url": ""},
+        {"id": "demo:tc1", "kind": "cyclone", "title": "Tropical cyclone DEMO, Bay of Bengal", "level": 3, "lat": 14.6, "lon": 85.4,
+         "time": ago(6), "radius_km": 600, "detail": "Maximum winds about 110 km/h, moving north-west.", "src": "GDACS (demo)", "url": ""},
+        {"id": "demo:fl1", "kind": "flood", "title": "Flood, Assam", "level": 2, "lat": 26.2, "lon": 91.7,
+         "time": ago(30), "radius_km": 150, "detail": "River levels above danger mark in several districts.", "src": "GDACS (demo)", "url": ""},
+        {"id": "demo:eq2", "kind": "earthquake", "title": "M 5.0 earthquake, near Hindu Kush", "level": 2, "lat": 36.4, "lon": 70.9,
+         "time": ago(9), "mag": 5.0, "radius_km": 150, "detail": "Depth 200 km.", "src": "USGS (demo)", "url": ""},
+        {"id": "demo:wf1", "kind": "wildfire", "title": "Wildfire, Uttarakhand", "level": 1, "lat": 30.1, "lon": 79.2,
+         "time": ago(20), "radius_km": 60, "detail": "", "src": "NASA EONET (demo)", "url": ""},
+        {"id": "demo:vo1", "kind": "volcano", "title": "Volcano activity, Barren Island", "level": 1, "lat": 12.28, "lon": 93.86,
+         "time": ago(48), "radius_km": 100, "detail": "", "src": "NASA EONET (demo)", "url": ""},
+    ]
+    return {"events": events, "updated": now.isoformat().replace("+00:00", "Z"),
+            "sources": {"usgs": "demo", "gdacs": "demo", "eonet": "demo"}}

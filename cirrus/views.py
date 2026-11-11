@@ -35,8 +35,9 @@ class Place:
 PAGES = (("overview", "Overview"), ("hourly", "Hourly"), ("daily", "14-day"), ("map", "Map"),
          ("details", "Details"), ("air", "Air & sun"))
 
-MAP_LAYERS = (("wind", "Wind"), ("radar", "Rain radar"), ("temp", "Temperature"), ("rain", "Rain forecast"),
-              ("clouds", "Clouds"), ("pressure", "Pressure"), ("humidity", "Humidity"))
+MAP_LAYERS = (("wind", "Wind"), ("upper", "Upper wind"), ("radar", "Rain radar"), ("temp", "Temperature"), ("rain", "Rain forecast"),
+              ("storm", "Storm risk"), ("gust", "Gusts"), ("clouds", "Clouds"), ("pressure", "Pressure"), ("humidity", "Humidity"))
+ALT_LEVELS = ((850, "850 hPa", "1.5 km"), (700, "700 hPa", "3 km"), (500, "500 hPa", "5.5 km"), (250, "Jet stream", "10 km"))
 
 
 def place_query(place: Place, units: Units, **extra) -> str:
@@ -96,12 +97,14 @@ def layout(title: str, body: str, *, place: Place | None = None, units: Units = 
             tabs.append(f'<a class="tab" href="{esc(page_url(key, place, units))}"{current}>{label}</a>')
         nav = f'<nav class="tabs" aria-label="Pages">{"".join(tabs)}</nav>'
     hidden_u = '<input type="hidden" name="u" value="f">' if units.imperial else ""
-    script_tags = "".join(f'<script src="{asset(s)}" defer></script>' for s in scripts)
+    script_tags = "".join(f'<script src="{asset(s)}" defer></script>' for s in ("alerts.js", *scripts))
+    body_attrs = (f' data-lat="{place.lat:.4f}" data-lon="{place.lon:.4f}" data-name="{esc(place.name)}"' if place else "")
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{esc(title)}</title><meta name="color-scheme" content="dark">
-<link rel="icon" href="{_FAVICON}">{_FONTS}<link rel="stylesheet" href="{asset("style.css")}"></head>
-<body>
+<link rel="icon" href="{_FAVICON}"><meta name="theme-color" content="#0D141B"><link rel="manifest" href="/static/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/icon-192.png">{_FONTS}<link rel="stylesheet" href="{asset("style.css")}"></head>
+<body{body_attrs}>
 <header class="top">
   <a class="brand" href="/">{icons.svg("cloud", 26)}<span>Cirrus</span></a>
   <form class="search" action="/search" method="get" role="search">
@@ -109,11 +112,15 @@ def layout(title: str, body: str, *, place: Place | None = None, units: Units = 
     <input id="q" name="q" type="search" placeholder="Search city or town" autocomplete="off" required minlength="2">{hidden_u}
   </form>
   {unit_toggle}
+  <button class="bell" id="alert-bell" type="button" aria-haspopup="dialog" aria-label="Weather alerts and home settings">{icons.svg("bell", 22)}<span class="badge" id="bell-badge" hidden></span></button>
 </header>
 {nav}
+<div id="alert-banner" class="alert-banner" role="region" aria-label="Weather alerts" hidden></div>
 <main>{body}</main>
 <footer class="foot">Forecast &amp; air quality: <a href="https://open-meteo.com/">Open-Meteo.com</a> (CC BY 4.0) ·
-Radar: <a href="https://www.rainviewer.com/">RainViewer</a> · Map © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors</footer>
+Radar: <a href="https://www.rainviewer.com/">RainViewer</a> · Map © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors ·
+Events: <a href="https://earthquake.usgs.gov/">USGS</a>, <a href="https://www.gdacs.org/">GDACS</a>, <a href="https://eonet.gsfc.nasa.gov/">NASA EONET</a> ·
+Alerts are early warnings from models and public feeds, not official warnings.</footer>
 {script_tags}
 </body></html>"""
 
@@ -142,6 +149,7 @@ def home(units: Units, popular: list[Place]) -> str:
     body = f"""<section class="hero"><h1>Weather, with the map in front.</h1>
 <p>Search any city or town for the forecast, radar, wind and more. No account, no API keys.</p>
 <div class="hero-actions"><button class="btn primary" id="locate" type="button">{icons.svg("pin", 18)} Use my location</button>
+<button class="btn" id="set-home" type="button">{icons.svg("home", 18)} Set my home &amp; alerts</button>
 <span id="locate-msg" class="muted" role="status"></span></div>
 <h2 class="small">Popular places</h2><div class="cities">{cities}</div></section>"""
     return layout("Cirrus weather", body, units=units, scripts=("home.js",))
@@ -155,6 +163,14 @@ def search_results(query: str, results: list[dict], units: Units) -> str:
                      f'<span>{esc(p.subtitle)} · {p.lat:.2f}, {p.lon:.2f}</span></a>')
     inner = f'<div class="cities">{"".join(items)}</div>' if items else '<p class="muted">No places found. Try another spelling.</p>'
     return layout(f"Search: {query}", f'<section class="hero"><h1 class="small-h">Results for “{esc(query)}”</h1>{inner}</section>', units=units)
+
+
+def notice(title: str, message: str, *, action: str = "", token: str = "", button: str = "") -> str:
+    """A small page with one button (confirm an e-mail, unsubscribe). The button is wired up by alerts.js."""
+    btn = (f'<p><button class="btn primary" type="button" data-action="{esc(action)}" data-token="{esc(token)}">{esc(button)}</button></p>'
+           '<p id="notice-result" class="muted" role="status"></p>') if action else ""
+    return layout(title, f'<section class="hero"><h1 class="small-h">{esc(title)}</h1><p class="muted">{esc(message)}</p>{btn}'
+                         '<p><a class="btn" href="/">Back to Cirrus</a></p></section>')
 
 
 def error_page(title: str, message: str, units: Units = Units(), place: Place | None = None, page: str = "") -> str:
@@ -220,11 +236,16 @@ def map_panel(place: Place, units: Units, wx: Weather | None, tall: bool = False
     data = {"lat": f"{place.lat:.4f}", "lon": f"{place.lon:.4f}", "name": place.name, "tz": wx.tz if wx else "UTC",
             "imperial": "1" if units.imperial else "0", "layer": layer}
     attrs = " ".join(f'data-{k}="{esc(v)}"' for k, v in data.items())
+    levels = "".join(f'<button class="lvl" type="button" data-level="{v}" aria-pressed="false">{esc(n)} <small>{esc(h)}</small></button>' for v, n, h in ALT_LEVELS)
     return f"""<section class="map-card{' tall' if tall else ''}" id="mapcard" {attrs} aria-label="Weather map">
 <div class="map-toolbar"><div class="chips-row" role="group" aria-label="Map layers">{chips}</div>
 <div class="map-tools"><label class="opacity"><span>Overlay</span><input type="range" min="30" max="100" value="85" class="opacity-range" aria-label="Overlay opacity"></label>
-<button class="ctl" type="button" id="btn-base" aria-label="Switch basemap between dark and light" title="Basemap">{icons.svg("layers", 18)}</button>
+<button class="ctl" type="button" id="btn-base" aria-label="Switch basemap" title="Basemap">{icons.svg("layers", 18)}</button>
 <button class="ctl" type="button" id="btn-full" aria-label="Toggle full screen map" title="Full screen">{icons.svg("expand", 18)}</button></div></div>
+<div class="map-sub"><div class="levels" id="alt-levels" role="group" aria-label="Wind height" hidden>{levels}</div>
+<div class="toggles"><button class="tgl" id="tg-hazards" type="button" aria-pressed="true" title="Earthquakes, cyclones, floods, volcanoes and wildfires">{icons.svg("alert", 16)} Hazards <span class="count" id="hz-count"></span></button>
+<button class="tgl" id="tg-night" type="button" aria-pressed="false" title="Show where it is night">{icons.svg("moon", 16)} Day / night</button>
+<button class="tgl" id="btn-locate" type="button" title="Centre the map on your device location">{icons.svg("locate", 16)} My location</button></div></div>
 <div class="map-stage" id="map-stage" tabindex="0" role="group" aria-label="Interactive weather map. Drag to pan, scroll or pinch to zoom, arrow keys to move, plus and minus to zoom. Click a point for its forecast.">
   <div class="map-layers" id="map-layers"></div>
   <div class="pin" id="pin" hidden><span class="dot"></span><span class="pin-label"></span></div>
@@ -234,7 +255,7 @@ def map_panel(place: Place, units: Units, wx: Weather | None, tall: bool = False
     <button class="ctl big" type="button" id="zoom-out" aria-label="Zoom out">{icons.svg("minus", 20)}</button></div>
   <div class="ui bl"><div class="legend" id="legend"><div class="legend-title"></div><div class="legend-bar"></div><div class="legend-ticks"></div></div></div>
   <div class="ui bc"><div class="status" id="map-status" role="status" aria-live="polite"></div></div>
-  <div class="attrib">© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · Radar <a href="https://www.rainviewer.com/">RainViewer</a> · <a href="https://open-meteo.com/">Open-Meteo</a></div>
+  <div class="attrib">© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · Radar <a href="https://www.rainviewer.com/">RainViewer</a> · <a href="https://open-meteo.com/">Open-Meteo</a><span class="sat-credit"> · Imagery <a href="https://earthdata.nasa.gov/gibs">NASA GIBS</a> (Terra MODIS)</span></div>
   <noscript><p class="noscript">The weather map needs JavaScript.</p></noscript>
 </div>
 <div class="timeline">

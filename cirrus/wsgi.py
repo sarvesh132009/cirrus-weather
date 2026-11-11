@@ -7,7 +7,7 @@ import json
 from http import HTTPStatus
 from urllib.parse import parse_qsl, quote, urlencode
 
-from .server import dispatch, finalize
+from .server import MAX_BODY, dispatch, finalize
 
 # Request headers that are safe to show on the ?__debug=1 page
 _DEBUG_HEADERS = ("HTTP_HOST", "HTTP_X_MATCHED_PATH", "HTTP_X_VERCEL_ID", "HTTP_X_VERCEL_DEPLOYMENT_URL")
@@ -36,8 +36,8 @@ def _resolve(environ) -> tuple[str, bool]:
 
 def app(environ, start_response):
     method = environ.get("REQUEST_METHOD", "GET")
-    if method not in ("GET", "HEAD"):
-        start_response("405 Method Not Allowed", [("Allow", "GET, HEAD"), ("Content-Type", "text/plain; charset=utf-8")])
+    if method not in ("GET", "HEAD", "POST"):
+        start_response("405 Method Not Allowed", [("Allow", "GET, HEAD, POST"), ("Content-Type", "text/plain; charset=utf-8")])
         return [b"Method not allowed"]
     raw, debug = _resolve(environ)
     if debug:  # shows what the platform handed to the function; useful when a deployment routes wrongly
@@ -48,8 +48,15 @@ def app(environ, start_response):
         start_response("200 OK", [("Content-Type", "application/json"), ("Cache-Control", "no-store"),
                                   ("Content-Length", str(len(body)))])
         return [body]
+    hdrs = {k[5:].lower().replace("_", "-"): v for k, v in environ.items() if k.startswith("HTTP_")}
+    hdrs["content-type"] = environ.get("CONTENT_TYPE", "")
+    hdrs["remote-addr"] = environ.get("REMOTE_ADDR", "")
+    body_in = b""
+    if method == "POST":
+        length = environ.get("CONTENT_LENGTH") or "0"
+        body_in = environ["wsgi.input"].read(min(int(length) if length.isdigit() else MAX_BODY + 1, MAX_BODY + 1))
     status, headers, body = finalize(
-        dispatch(raw),
+        dispatch(raw, method=method, body=body_in, headers=hdrs),
         accept_encoding=environ.get("HTTP_ACCEPT_ENCODING", ""),
         if_none_match=environ.get("HTTP_IF_NONE_MATCH", ""),
         send_body=method == "GET",

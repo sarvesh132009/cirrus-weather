@@ -192,10 +192,21 @@ def radar_frames() -> dict:
 # ---- map grid ----------------------------------------------------------------------------------
 
 SPACINGS = (0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 12.0)
-FIELD_VARS = ("temperature_2m", "relative_humidity_2m", "precipitation", "pressure_msl", "cloud_cover",
-              "wind_speed_10m", "wind_direction_10m", "wind_gusts_10m")
+# The grid is fetched in groups, so asking for the storm layer or one altitude does not drag in every other variable
+# (Open-Meteo counts each variable towards its fair-use limit). `core` is what the everyday layers share.
+UPPER_LEVELS = (850, 700, 500, 250)     # hPa: about 1.5 km, 3 km, 5.5 km and 10 km (the jet stream)
+GROUPS: dict[str, tuple[str, ...]] = {
+    "core": ("temperature_2m", "relative_humidity_2m", "precipitation", "pressure_msl", "cloud_cover",
+             "wind_speed_10m", "wind_direction_10m", "wind_gusts_10m"),
+    "cape": ("cape",),
+    **{f"p{lv}": (f"wind_speed_{lv}hPa", f"wind_direction_{lv}hPa") for lv in UPPER_LEVELS},
+}
+CORE_VARS = GROUPS["core"]
+FIELD_VARS = tuple(v for g in GROUPS.values() for v in g)
+_GROUP_OF = {v: g for g, names in GROUPS.items() for v in names}
 _DECIMALS = {"temperature_2m": 1, "relative_humidity_2m": 0, "precipitation": 2, "pressure_msl": 1,
-             "cloud_cover": 0, "wind_speed_10m": 1, "wind_direction_10m": 0, "wind_gusts_10m": 1}
+             "cloud_cover": 0, "wind_speed_10m": 1, "wind_direction_10m": 0, "wind_gusts_10m": 1, "cape": 0,
+             **{f"wind_speed_{lv}hPa": 0 for lv in UPPER_LEVELS}, **{f"wind_direction_{lv}hPa": 0 for lv in UPPER_LEVELS}}
 
 
 def pick_spacing(span_lat: float, span_lon: float) -> float:
@@ -206,9 +217,9 @@ def pick_spacing(span_lat: float, span_lon: float) -> float:
     return SPACINGS[-1]
 
 
-def _fetch_points(points: list[tuple[float, float]]) -> tuple[list[dict], list[str]]:
+def _fetch_points(points: list[tuple[float, float]], names: tuple[str, ...]) -> tuple[list[dict], list[str]]:
     if config.DEMO:
-        return demo.grid_points(points, config.FIELD_HOURS)
+        return demo.grid_points(points, config.FIELD_HOURS, names)
     if not budget.spend(len(points)):
         raise UpstreamError("Today's weather-grid budget is used up. It resets at midnight UTC, "
                             "or raise CIRRUS_DAILY_BUDGET if you self-host Open-Meteo.")
@@ -217,7 +228,7 @@ def _fetch_points(points: list[tuple[float, float]]) -> tuple[list[dict], list[s
     def one(chunk: list[tuple[float, float]]) -> list[dict]:
         data = _http_json(config.FORECAST_URL, {
             "latitude": ",".join(f"{la:.3f}" for la, _ in chunk), "longitude": ",".join(f"{lo:.3f}" for _, lo in chunk),
-            "hourly": ",".join(FIELD_VARS), "forecast_hours": config.FIELD_HOURS, "timezone": "GMT",
+            "hourly": ",".join(names), "forecast_hours": config.FIELD_HOURS, "timezone": "GMT",
             "wind_speed_unit": "kmh"})
         return data if isinstance(data, list) else [data]
 
@@ -228,11 +239,18 @@ def _fetch_points(points: list[tuple[float, float]]) -> tuple[list[dict], list[s
     return [r["hourly"] for r in flat], flat[0]["hourly"]["time"]
 
 
-def field(south: float, west: float, north: float, east: float, zoom: float = 0.0) -> dict:
+def field(south: float, west: float, north: float, east: float, zoom: float = 0.0,
+          variables: tuple[str, ...] | list[str] | None = None) -> dict:
     """A regular lat/lon grid of hourly weather covering the viewport (plus padding).
 
     The grid is snapped to multiples of its spacing so panning around reuses the cached answer.
+    `variables` picks what to include; each group of variables is fetched and cached on its own, on the same grid.
     """
+    wanted = list(variables) if variables else list(CORE_VARS)
+    unknown = [v for v in wanted if v not in _GROUP_OF]
+    if unknown:
+        raise ValueError(f"Unknown variable: {unknown[0]}")
+    groups = [g for g in GROUPS if any(_GROUP_OF[v] == g for v in wanted)]
     south, north = max(-80.0, min(south, north)), min(80.0, max(south, north))
     west, east = max(-180.0, min(west, east)), min(180.0, max(west, east))
     if north - south < 1:
@@ -245,18 +263,47 @@ def field(south: float, west: float, north: float, east: float, zoom: float = 0.
     step = pick_spacing(n_lat - s_lat, e_lon - w_lon)
     s0, w0 = math.floor(s_lat / step) * step, math.floor(w_lon / step) * step
     ny, nx = math.ceil((n_lat - s0) / step) + 1, math.ceil((e_lon - w0) / step) + 1
-    key = ("field", step, round(s0, 3), round(w0, 3), nx, ny)
+
+    def one_group(group: str) -> dict:
+        names = GROUPS[group]
+
+        def go():
+            pts = [(min(90.0, s0 + j * step), min(180.0, w0 + i * step)) for j in range(ny) for i in range(nx)]
+            series, times = _fetch_points(pts, names)
+            out: dict[str, list] = {}
+            for name in names:
+                nd = _DECIMALS[name]
+                out[name] = [[round(series[p][name][t] or 0.0, nd) for p in range(len(pts))] for t in range(len(times))]
+            return {"times": times, "vars": out}
+
+        return memo(("field", group, step, round(s0, 3), round(w0, 3), nx, ny), config.TTL["field"], go)
+
+    parts = [one_group(g) for g in groups]
+    merged = {k: v for part in parts for k, v in part["vars"].items()}
+    return {"spacing": step, "south": round(s0, 4), "west": round(w0, 4), "nx": nx, "ny": ny,
+            "dlat": step, "dlon": step, "times": parts[0]["times"], "vars": merged, "zoom": zoom,
+            "source": "demo" if config.DEMO else "open-meteo"}
+
+
+# ---- reverse geocoding (coordinates -> a place name) -----------------------------------------------------------
+
+def reverse(lat: float, lon: float) -> dict:
+    """Name a coordinate (for "use my device location"). OpenStreetMap's Nominatim, cached; falls back to the coordinates."""
+    lat, lon = round(lat, 2), round(lon, 2)
+    fallback = {"name": f"{lat:.2f}, {lon:.2f}", "region": "", "country": ""}
 
     def go():
-        pts = [(min(90.0, s0 + j * step), min(180.0, w0 + i * step)) for j in range(ny) for i in range(nx)]
-        series, times = _fetch_points(pts)
-        out: dict[str, list] = {}
-        for name in FIELD_VARS:
-            nd = _DECIMALS[name]
-            out[name] = [[round(series[p][name][t] or 0.0, nd) for p in range(len(pts))] for t in range(len(times))]
-        return {"spacing": step, "south": round(s0, 4), "west": round(w0, 4), "nx": nx, "ny": ny,
-                "dlat": step, "dlon": step, "times": times, "vars": out, "zoom": zoom,
-                "source": "demo" if config.DEMO else "open-meteo"}
+        if config.DEMO:
+            return demo.reverse(lat, lon)
+        try:
+            data = _http_json(config.REVERSE_URL, {"format": "jsonv2", "lat": lat, "lon": lon, "zoom": 10,
+                                                   "addressdetails": 1, "accept-language": "en"})
+        except UpstreamError:
+            return fallback
+        a = data.get("address") or {}
+        name = next((a[k] for k in ("city", "town", "village", "suburb", "municipality", "county", "state_district")
+                     if a.get(k)), "")
+        return {"name": name or fallback["name"], "region": a.get("state", ""), "country": a.get("country", "")}
 
-    result = memo(key, config.TTL["field"], go)
-    return {**result, "zoom": zoom}
+    result = memo(("reverse", lat, lon), config.TTL["reverse"], go)
+    return result

@@ -30,11 +30,56 @@ Add `&u=f` to any URL (or use the header toggle) for °F / mph / inHg.
 
 A custom canvas map engine (no Leaflet): pan with inertia, pinch / wheel / double-click zoom, keyboard control.
 
-- Layers: **Wind** (animated particles), **Radar** (observed, RainViewer), **Temperature**, **Rain forecast**, **Clouds**, **Pressure** (isobars with H/L), **Humidity**
+- Layers: **Wind** (animated particles), **Upper wind** (850 hPa, 700 hPa, 500 hPa and the **jet stream** at 250 hPa, with a height chooser), **Radar** (observed, RainViewer), **Temperature**, **Rain forecast**, **Storm risk** (CAPE: how much energy thunderstorms could use), **Gusts**, **Clouds**, **Pressure** (isobars with H/L), **Humidity**
+- **Hazards overlay**: live earthquakes, cyclones, floods, volcanoes and wildfires (USGS, GDACS, NASA EONET). Serious ones pulse; click one for details and how far it reaches
+- **Day / night**: the dark side of the Earth for the time on the timeline, with twilight bands
+- **Basemaps**: dark, light and **satellite** (NASA GIBS, Terra MODIS true colour of the previous day)
+- **Home** and **You are here** markers, and a "My location" button
 - 48-hour forecast timeline with play/pause and a Now button
 - Hover value chip, click any point for a popup with its forecast and a link to the full forecast for that spot
 - Overlay opacity, dark/light basemap, fullscreen
 - The weather grid is fetched for the visible area and snapped to a fixed spacing so panning reuses the cache
+
+## Alerts: home, alarm and notifications
+
+1. On the first visit a window asks you to **set your home**: search a city or town, or use the device location. Change it any time from the bell (top right) > *Home & notifications*.
+2. Cirrus then checks the alerts for **your home** and, if you allow location, for **where you are now** (when you are more than 25 km from home). The banner at the top and the bell show what is active.
+3. When a new alert reaches your chosen level (default **Warning**) the page plays an **alarm sound** (two-tone siren: 2 s for a watch, 6 s for a warning, 10 s for an extreme event, with a Stop button) and sends a **notification** (system sound and vibration, stays on screen for warnings).
+4. Optional: add an **e-mail address** to be told even when the site is closed (setup below).
+
+What raises an alert (Cirrus's own thresholds, in `cirrus/alerts.py`; they are early warnings, not official alerts):
+
+| Source | Alerts |
+|---|---|
+| Forecast (Open-Meteo) | extreme heat or cold (feels-like), heavy rain and flood risk (24 h totals, India's heavy / very heavy / extremely heavy classes, and hourly rates), gale to hurricane-force gusts, thunderstorms and hail, snow and freezing rain, dense fog, unhealthy air |
+| Earthquakes (USGS, magnitude 4.5+) | within a distance that grows with magnitude, for 36 hours |
+| Cyclones, floods, volcanoes, wildfires (GDACS, NASA EONET) | within the event's reach; the level drops one step on the outer edge |
+
+Levels: 1 Advisory, 2 Watch, 3 Warning, 4 Extreme. An alert is announced once, and again only if its level rises.
+
+**What works when (honest limits)**
+
+| Situation | Alarm sound | Notification | Alerts for where you are |
+|---|---|---|---|
+| Cirrus open in a tab | yes (the browser needs one tap on the page first, then it can play) | yes, once you turn them on | yes, with location allowed |
+| Installed as an app (Chrome on Android) | while open | also in the background about every few hours, if Chrome allows it. Chrome decides how often | last position only |
+| Browser closed, no e-mail | no | no | no |
+| Browser closed, **e-mail on** | no (the e-mail app makes its own sound) | e-mail | the last position this device reported while Cirrus was open (up to 48 h old) |
+
+A web page cannot read your location while it is closed, so "where you are" is the last position Cirrus saw while it was open. On iPhone, notifications work only after *Share > Add to Home Screen*.
+
+### Alerts by e-mail (optional setup, all free)
+
+E-mail needs three things the site does not have by default: a place to keep subscribers, a mailbox to send from, and something that runs the check every 30 minutes. Until you set them up, the e-mail section says it is not switched on.
+
+1. **Subscriber store.** In Vercel open your project > *Storage* > *Create Database* > **Upstash for Redis** (free plan) and connect it. Vercel adds `KV_REST_API_URL` and `KV_REST_API_TOKEN` (the app also accepts `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`).
+2. **Mailbox.** Use a Gmail address: turn on 2-step verification, create an **app password** (Google Account > Security > App passwords), then add these Environment Variables in Vercel: `CIRRUS_SMTP_USER` (the Gmail address) and `CIRRUS_SMTP_PASSWORD` (the app password). Gmail allows about 500 mails a day; `CIRRUS_MAIL_DAILY_CAP` (default 400) keeps Cirrus under that.
+3. **Secrets.** Add `CRON_SECRET` (any long random text) in Vercel, and `CIRRUS_BASE_URL` (for example `https://cirrus-weather.vercel.app`; Vercel's own production URL is used if you leave it out). Redeploy.
+4. **Scheduler.** In your GitHub repository open *Settings > Secrets and variables > Actions* and add `SITE_URL` (your site address) and `CRON_SECRET` (the same text). The included workflow `.github/workflows/alerts.yml` then calls `/api/cron/alerts` every 30 minutes. (GitHub switches scheduled workflows off after 60 days without any repository activity; push a small change or press *Run workflow* to wake it.)
+
+How it protects people: nothing is stored until the address is confirmed from a link in an e-mail (the link only opens a page with a button, so mail scanners cannot confirm for you); at most 3 confirmation mails per address per 15 minutes and 10 per visitor per hour; one alert mail per hour per person unless something is Extreme; every mail has an unsubscribe link and the one-click `List-Unsubscribe` header; unsubscribing deletes everything. Only the e-mail, the home place and, if allowed, the last position are stored, in your own Upstash database.
+
+Each run checks the people who were checked longest ago first, reuses a forecast for 3 hours and makes at most 40 weather calls, so Open-Meteo's daily allowance is not used up by e-mail checks.
 
 ## Data sources and limits
 
@@ -42,9 +87,13 @@ A custom canvas map engine (no Leaflet): pan with inertia, pinch / wheel / doubl
 |---|---|---|
 | [Open-Meteo](https://open-meteo.com) | Forecast, air quality, geocoding, map grid | Free tier is **non-commercial** only; attribution is in the footer. About 10,000 calls/day fair use |
 | [RainViewer](https://www.rainviewer.com) | Radar frames | Free tier is restricted (about 100 requests/min per IP); if their format changes, adjust `radar_frames` in `cirrus/openmeteo.py` and the tile URL in `public/static/map.js` |
-| [OpenStreetMap](https://tile.openstreetmap.org) | Base map tiles | Public tile servers are for light use only |
+| [OpenStreetMap](https://tile.openstreetmap.org) | Base map tiles; Nominatim names the place for "use my device location" | Public servers are for light use only (Nominatim: about 1 request a second) |
+| [USGS](https://earthquake.usgs.gov/earthquakes/feed/) | Earthquakes, magnitude 4.5+ in the last 7 days | Free, no key |
+| [GDACS](https://www.gdacs.org/) | Cyclones, floods, volcanoes, wildfires with alert levels | Free, no key. The query parameters are from GDACS's documentation; if they are refused, Cirrus asks for the default list and filters it |
+| [NASA EONET](https://eonet.gsfc.nasa.gov/docs/v3) | Storms, volcanoes, floods, landslides, wildfires | Free, no key |
+| [NASA GIBS](https://nasa-gibs.github.io/gibs-api-docs/) | Satellite basemap (previous day, Terra MODIS) | Free, no key; sharp up to zoom 9 and stretched beyond; gaps appear where the satellite did not pass |
 
-**Call budget.** Each map grid point counts as one Open-Meteo call. The server keeps a daily budget (default 8000) and stops fetching when it is spent.
+**Call budget.** Each map grid point counts as one Open-Meteo call, per group of variables: the everyday layers share one group, and Storm risk and each height of Upper wind are fetched on their own only when you open them. The server keeps a daily budget (default 8000) and stops fetching when it is spent.
 Change it with `CIRRUS_DAILY_BUDGET=5000 python run.py`. Responses are cached (forecast 10 min, air 30 min, geocode 24 h, radar 2 min, map grid 30 min).
 
 **Going beyond the free limits.** Self-host Open-Meteo (it is open source) and point `FORECAST_URL`, `AIR_URL` and `GEOCODE_URL` in `cirrus/config.py` at your server,
@@ -157,6 +206,10 @@ cirrus/
   charts.py            server-side SVG charts
   icons.py             inline SVG icons
   views.py             HTML for every page
+  hazards.py           earthquake / cyclone / flood / volcano / wildfire feeds
+  alerts.py            alert rules for a place
+  notify.py            e-mail subscribers, confirmation, the scheduled check
+  store.py, mailer.py  Upstash Redis client (or in-memory), SMTP sender
   server.py            routing, validation, cache headers, gzip, static files
   wsgi.py              WSGI app (what Vercel runs)
 api/index.py           Vercel entry point
@@ -165,6 +218,9 @@ public/static/         files the CDN serves directly
   style.css            dark Split Studio theme
   map.js               map engine and layers
   home.js              "Use my location"
+  alerts.js            home setup, banner, alarm sound, notifications, e-mail sign-up
+  sw.js, manifest.webmanifest, icon-*.png   service worker and install files
+.github/workflows/alerts.yml   30-minute scheduler for e-mail alerts
 tests/test_app.py      offline tests
 ```
 
