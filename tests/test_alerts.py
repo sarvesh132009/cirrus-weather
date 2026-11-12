@@ -146,6 +146,15 @@ class Subscription(unittest.TestCase):
         link = re.search(r"/confirm\?t=([\w-]+)", mailer.OUTBOX[-1]["text"]).group(1)
         return d["pid"], link
 
+    def test_confirmation_mail_asks_to_mark_not_spam(self):
+        status, d = call("/api/subscribe", "POST", {"email": "spam@example.com", "home": self.HOME, "minLevel": 3})
+        self.assertEqual(status, 200)
+        self.assertIn("Not spam", d["message"])
+        mail = mailer.OUTBOX[-1]
+        self.assertIn("Not spam", mail["text"])
+        self.assertIn("Not spam", mail["html"])
+        self.assertIn("Not spam", (ROOT / "public" / "static" / "alerts.js").read_text(encoding="utf-8"))
+
     def test_full_flow(self):
         pid, link = self.subscribe("flow@example.com")
         self.assertFalse(call(f"/api/subscribe/status?pid={pid}")[1]["confirmed"])

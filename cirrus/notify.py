@@ -107,9 +107,11 @@ def _view(rec: dict) -> dict:
 
 def _confirm_mail(email: str, link: str) -> None:
     text = (f"Please confirm that you want weather and disaster alerts from Cirrus.\n\n{link}\n\n"
-            "The link works for 24 hours. If you did not ask for this, ignore this message and nothing will be stored.")
+            "The link works for 24 hours. If you did not ask for this, ignore this message and nothing will be stored.\n\n"
+            "Found this in your Spam folder? Please click \"Not spam\" so future weather alerts reach your inbox.")
     html = (f'<p>Please confirm that you want weather and disaster alerts from Cirrus.</p><p><a href="{escape(link)}">Confirm my e-mail</a></p>'
-            '<p style="color:#666">The link works for 24 hours. If you did not ask for this, ignore this message and nothing will be stored.</p>')
+            '<p style="color:#666">The link works for 24 hours. If you did not ask for this, ignore this message and nothing will be stored.</p>'
+            '<p style="color:#666">Found this in your Spam folder? Please click <b>Not spam</b> so future weather alerts reach your inbox.</p>')
     mailer.send(email, "Confirm your Cirrus alerts", text, html)
 
 
@@ -130,7 +132,7 @@ def subscribe(email: str, home, min_level, ip: str = "") -> dict:
         _confirm_mail(email, f"{base}/confirm?{urlencode({'t': ctok})}")
     except (RuntimeError, ValueError) as exc:
         raise NotifyError(502, str(exc)) from exc
-    return {"pid": pid, "message": "Check your inbox for a confirmation e-mail (and the spam folder)."}
+    return {"pid": pid, "message": "Check your inbox for a confirmation e-mail. If it is in Spam, open it and click Not spam so future alerts reach your inbox."}
 
 
 def confirm(ctok: str) -> dict:

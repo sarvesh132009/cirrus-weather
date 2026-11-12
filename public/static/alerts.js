@@ -261,7 +261,7 @@
     if (p.token) return sec('Step 3: alerts by e-mail', h('p', null, '✓ Subscribed. ', h('strong', null, p.email || 'Your e-mail'), ' gets an e-mail when something at your home (or where this device last was) reaches your alert level.'),
       note('Changing your home above also changes it here. This device shares its position with the e-mail service only while Cirrus is open and “Watch where I am” is on.'), msg.saved ? note(msg.saved) : null,
       h('div', { class: 'cd-row' }, h('button', { type: 'button', class: 'btn', onclick: async () => { try { await post('/api/unsubscribe', { token: p.token }); } catch { /* already gone */ } setPrefs({ token: '', pid: '', email: '' }); renderDialog(); } }, 'Stop e-mail alerts')));
-    if (p.pid) return sec('Step 3: alerts by e-mail', note(`We sent a confirmation link to ${p.email}. Open it (check spam too) and tap the button. This page notices automatically.`),
+    if (p.pid) return sec('Step 3: alerts by e-mail', note(`We sent a confirmation link to ${p.email}. Open it and tap the button. If it is in Spam, open it there and click “Not spam” so future alerts reach your inbox. This page notices automatically.`),
       h('div', { class: 'cd-row' }, h('button', { type: 'button', class: 'btn', onclick: pollConfirm }, 'I have confirmed'), h('button', { type: 'button', class: 'btn', onclick: () => { setPrefs({ pid: '' }); renderDialog(); } }, 'Use another e-mail')), msg.mail ? note(msg.mail, 'warn') : null);
     const input = h('input', { type: 'email', class: 'cd-input', placeholder: 'you@gmail.com', 'aria-label': 'Your e-mail address', autocomplete: 'email', value: msg.email || '' });
     return sec('Step 3: alerts by e-mail (optional)', note('Get an e-mail when something threatens your home, even if the site is closed and you are somewhere else. Any address works, Gmail included. You confirm it first and can stop any time. We store only the address, your home and, if allowed, where this device last was.'), input,
@@ -302,7 +302,7 @@
     const btn = e.target.closest('[data-action]'); if (!btn) return;
     const out = $('#notice-result'); btn.disabled = true;
     try {
-      if (btn.dataset.action === 'confirm') { await post('/api/confirm', { t: btn.dataset.token }); out.textContent = 'Confirmed. You will get alerts by e-mail. You can return to Cirrus now.'; }
+      if (btn.dataset.action === 'confirm') { await post('/api/confirm', { t: btn.dataset.token }); out.textContent = 'Confirmed. You will get alerts by e-mail. If this message was in your Spam folder, open it there and click “Not spam” so alerts reach your inbox. You can return to Cirrus now.'; }
       else { await post('/api/unsubscribe', { token: btn.dataset.token }); if (P().token === btn.dataset.token) setPrefs({ token: '', pid: '', email: '' }); out.textContent = 'Done. You will not get more alert e-mails.'; }
     } catch (err) { out.textContent = err.message; btn.disabled = false; }
   });
@@ -310,6 +310,6 @@
     try { cfg = await api('/api/config'); } catch { /* e-mail section stays off */ }
     try { if (navigator.permissions) { const st = await navigator.permissions.query({ name: 'geolocation' }); geoState = st.state; st.onchange = () => { geoState = st.state; }; } } catch { /* not supported */ }
     publishPlaces(); check(true);
-    if (!S.home && !$('[data-action]') && Date.now() - S.askedAt > 7 * 864e5) { S.askedAt = Date.now(); save(); setTimeout(() => openDialog('settings'), 1200); }   // first visit: ask for a home, then not again for a week
+    if (!S.home && !$('[data-action]') && document.body.dataset.page !== 'install' && Date.now() - S.askedAt > 7 * 864e5) { S.askedAt = Date.now(); save(); setTimeout(() => openDialog('settings'), 1200); }   // first visit: ask for a home, then not again for a week
   })();
 })();
