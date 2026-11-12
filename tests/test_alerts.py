@@ -153,7 +153,9 @@ class Subscription(unittest.TestCase):
         mail = mailer.OUTBOX[-1]
         self.assertIn("Not spam", mail["text"])
         self.assertIn("Not spam", mail["html"])
-        self.assertIn("Not spam", (ROOT / "public" / "static" / "alerts.js").read_text(encoding="utf-8"))
+        js = (ROOT / "public" / "static" / "alerts.js").read_text(encoding="utf-8")
+        self.assertIn("The confirmation e-mail may land in your Spam folder", js)   # shown in Step 3 before anything is sent
+        self.assertIn("Not spam", js)
 
     def test_full_flow(self):
         pid, link = self.subscribe("flow@example.com")
